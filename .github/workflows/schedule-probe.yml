@@ -1,0 +1,22 @@
+name: Schedule control probe
+run-name: Schedule probe - ${{ github.event_name }}
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/schedule-probe.yml'
+  schedule:
+    - cron: '2,12,22,32,42,52 * * * *'
+permissions: {}
+jobs:
+  clock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Record event and clock only
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+        run: |
+          printf 'event=%s\ncron=%s\n' "$EVENT" "$CRON"
+          date --utc --iso-8601=seconds
