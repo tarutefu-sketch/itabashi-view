@@ -1,0 +1,29 @@
+name: Timer chain proof
+run-name: Timer proof round ${{ inputs.round }}
+on:
+  workflow_dispatch:
+    inputs:
+      round:
+        type: string
+        default: '0'
+permissions:
+  actions: write
+  contents: read
+concurrency:
+  group: timer-chain-proof
+  cancel-in-progress: false
+jobs:
+  timer:
+    if: github.ref == 'refs/heads/main'
+    environment: monitor-clock-proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Clock proof
+        run: date --utc --iso-8601=seconds
+      - name: Automatically launch next proof
+        if: inputs.round == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run timer-proof.yml --repo "$REPO" --ref main -f round=1
