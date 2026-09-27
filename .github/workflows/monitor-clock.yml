@@ -1,0 +1,84 @@
+name: Automatic monitor clock
+run-name: Monitor clock · ${{ github.run_number }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: Use the one-minute startup timer for this run only
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: automatic-monitor-clock
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    if: github.ref == 'refs/heads/main' && vars.MONITOR_CLOCK_ENABLED == 'true'
+    environment: ${{ inputs.bootstrap && 'monitor-clock-start' || 'monitor-clock' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the trigger file only
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ vars.MONITOR_TARGET_REPO }}
+          ref: main
+          path: signal
+          ssh-key: ${{ secrets.MONITOR_TRIGGER_KEY }}
+          sparse-checkout: .github/monitor-tick.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Request a monitoring run
+        working-directory: signal
+        shell: bash
+        env:
+          CLOCK_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "monitor-clock[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          date --utc --iso-8601=seconds > .github/monitor-tick.txt
+          printf 'clock_run=%s\n' "$CLOCK_RUN" >> .github/monitor-tick.txt
+          git add -- .github/monitor-tick.txt
+          git commit --quiet -m "Request automatic inventory check"
+          for attempt in 1 2 3; do
+            if git pull --rebase --quiet origin main >/dev/null 2>&1 && git push --quiet origin HEAD:main >/dev/null 2>&1; then
+              echo 'Monitoring request sent.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Unable to send the monitoring request.' >&2
+          exit 1
+
+  next:
+    needs: signal
+    if: always() && !cancelled() && github.ref == 'refs/heads/main' && vars.MONITOR_CLOCK_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+    steps:
+      - name: Queue the next ten-minute timer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOCK_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if gh workflow run monitor-clock.yml --repo "$CLOCK_REPO" --ref main -f bootstrap=false; then
+              echo 'The next ten-minute timer has been queued.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Unable to queue the next timer.' >&2
+          exit 1
