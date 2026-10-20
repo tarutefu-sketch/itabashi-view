@@ -19,12 +19,24 @@ jobs:
   signal:
     if: github.ref == 'refs/heads/main' && vars.MONITOR_CLOCK_ENABLED == 'true'
     environment: ${{ inputs.bootstrap && 'monitor-clock-start' || 'monitor-clock' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     permissions:
       contents: read
     steps:
+      - name: Check daytime window in Japan
+        id: window
+        shell: bash
+        run: |
+          hour=$(TZ=Asia/Tokyo date +%H)
+          if (( 10#$hour >= 7 && 10#$hour < 22 )); then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+            echo 'Night pause: no private collection from 22:00 to 07:00 JST.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Check out the trigger file only
+        if: steps.window.outputs.active == 'true'
         uses: actions/checkout@v6
         with:
           repository: ${{ vars.MONITOR_TARGET_REPO }}
@@ -36,12 +48,15 @@ jobs:
           fetch-depth: 1
 
       - name: Request a monitoring run
+        if: steps.window.outputs.active == 'true'
         working-directory: signal
         shell: bash
         env:
           CLOCK_RUN: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          hour=$(TZ=Asia/Tokyo date +%H)
+          if (( 10#$hour < 7 || 10#$hour >= 22 )); then exit 0; fi
           git config user.name "monitor-clock[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           date --utc --iso-8601=seconds > .github/monitor-tick.txt
@@ -61,12 +76,12 @@ jobs:
   next:
     needs: signal
     if: always() && !cancelled() && github.ref == 'refs/heads/main' && vars.MONITOR_CLOCK_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:
       actions: write
     steps:
-      - name: Queue the next ten-minute timer
+      - name: Queue the next twenty-minute timer
         env:
           GH_TOKEN: ${{ github.token }}
           CLOCK_REPO: ${{ github.repository }}
@@ -75,7 +90,7 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             if gh workflow run monitor-clock.yml --repo "$CLOCK_REPO" --ref main -f bootstrap=false; then
-              echo 'The next ten-minute timer has been queued.' >> "$GITHUB_STEP_SUMMARY"
+              echo 'The next twenty-minute timer has been queued.' >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             sleep 5
